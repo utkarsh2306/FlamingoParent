@@ -31,7 +31,6 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
     await _engine!.enableAudio();
     await _engine!.disableVideo();
 
-    // ✅ Parent is audience — never touches microphone
     await _engine!.setClientRole(
       role: ClientRoleType.clientRoleAudience,
     );
@@ -41,7 +40,6 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
       scenario: AudioScenarioType.audioScenarioChatroom,
     );
 
-    // ✅ Force speaker from the start
     await _engine!.setDefaultAudioRouteToSpeakerphone(true);
 
     _engine!.registerEventHandler(RtcEngineEventHandler(
@@ -55,7 +53,6 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
       },
       onUserJoined: (connection, remoteUid, elapsed) {
         print('🎙️ Child detected in channel! uid=$remoteUid');
-        // ✅ Re-apply audio settings when child joins
         _engine?.muteAllRemoteAudioStreams(false);
         _engine?.setEnableSpeakerphone(true);
         _engine?.adjustPlaybackSignalVolume(100);
@@ -95,7 +92,6 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
   Future<void> startPlaying(int childId) async {
     await _initEngine();
 
-    // ✅ Leave previous channel cleanly
     if (_inChannel) {
       await _engine!.leaveChannel();
       await Future.delayed(const Duration(milliseconds: 500));
@@ -117,14 +113,12 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
       ),
     );
 
-    // ✅ Wait for join then configure audio
     await Future.delayed(const Duration(milliseconds: 300));
     await _engine!.muteLocalAudioStream(true);
     await _engine!.muteAllRemoteAudioStreams(false);
     await _engine!.setEnableSpeakerphone(true);
     await _engine!.adjustPlaybackSignalVolume(100);
 
-    // ✅ Monitor volume to verify audio is flowing
     await _engine!.enableAudioVolumeIndication(
       interval: 1000,
       smooth: 3,
