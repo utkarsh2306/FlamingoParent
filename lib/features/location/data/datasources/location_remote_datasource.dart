@@ -12,6 +12,14 @@ class LocationRemoteDataSourceImpl implements LocationRemoteDataSource {
   final _ctrl = StreamController<ChildLocationModel>.broadcast();
 
   LocationRemoteDataSourceImpl(this._socket) {
+    _registerListener();
+
+    // ✅ Re-register listener every time socket reconnects
+    _socket.onReconnect(_registerListener);
+  }
+
+  void _registerListener() {
+    _socket.off('location:received'); // remove old listener first
     _socket.on('location:received', (data) {
       try {
         _ctrl.add(ChildLocationModel.fromMap(Map<String, dynamic>.from(data)));
@@ -19,6 +27,7 @@ class LocationRemoteDataSourceImpl implements LocationRemoteDataSource {
         print('❌ location parse: $e');
       }
     });
+    print('📍 Location listener registered');
   }
 
   @override
@@ -27,6 +36,7 @@ class LocationRemoteDataSourceImpl implements LocationRemoteDataSource {
   @override
   void dispose() {
     _socket.off('location:received');
+    _socket.removeReconnectCallback(_registerListener);
     _ctrl.close();
   }
 }

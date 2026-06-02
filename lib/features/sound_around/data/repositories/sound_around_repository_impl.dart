@@ -8,12 +8,12 @@ class SoundAroundRepositoryImpl implements SoundAroundRepository {
   @override
   Future<void> activate(int childId) async {
     await dataSource.sendActivate(childId);
-    await dataSource.startPlaying();
+    await dataSource.startPlaying(childId);
   }
 
   @override
   Future<void> deactivate(int childId, int sessionId) async {
     await dataSource.sendDeactivate(childId, sessionId);
-    await dataSource.stopPlaying();
+    await dataSource.stopPlaying(childId, sessionId);
   }
 }

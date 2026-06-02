@@ -1,27 +1,88 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'package:flutter_sound/flutter_sound.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import '../../../../core/utils/socket_service.dart';
+
+const String agoraAppId = 'd366a914ac334ee6aa7b8df9942b64b0';
 
 abstract class SoundAroundDataSource {
   Future<void> sendActivate(int childId);
   Future<void> sendDeactivate(int childId, int sessionId);
-  Future<void> startPlaying();
-  Future<void> stopPlaying();
+  Future<void> startPlaying(int childId);
+  Future<void> stopPlaying(int childId, int sessionId);
 }
 
 class SoundAroundDataSourceImpl implements SoundAroundDataSource {
   final SocketService _socket;
-  final FlutterSoundPlayer _player;
-  bool _playerOpen = false;
-  int _lastIndex = -1;
+  RtcEngine? _engine;
+  bool _engineInitialized = false;
+  bool _inChannel = false;
 
-  SoundAroundDataSourceImpl(this._socket, this._player);
+  SoundAroundDataSourceImpl(this._socket);
+
+  Future<void> _initEngine() async {
+    if (_engineInitialized) return;
+
+    _engine = createAgoraRtcEngine();
+    await _engine!.initialize(const RtcEngineContext(
+      appId: agoraAppId,
+      channelProfile: ChannelProfileType.channelProfileLiveBroadcasting,
+    ));
+
+    await _engine!.enableAudio();
+    await _engine!.disableVideo();
+
+    // ✅ Parent is audience — never touches microphone
+    await _engine!.setClientRole(
+      role: ClientRoleType.clientRoleAudience,
+    );
+
+    await _engine!.setAudioProfile(
+      profile: AudioProfileType.audioProfileDefault,
+      scenario: AudioScenarioType.audioScenarioChatroom,
+    );
+
+    // ✅ Force speaker from the start
+    await _engine!.setDefaultAudioRouteToSpeakerphone(true);
+
+    _engine!.registerEventHandler(RtcEngineEventHandler(
+      onJoinChannelSuccess: (connection, elapsed) {
+        print('🎧 Parent joined Agora channel: ${connection.channelId}');
+        _inChannel = true;
+      },
+      onLeaveChannel: (connection, stats) {
+        print('🎧 Parent left Agora channel');
+        _inChannel = false;
+      },
+      onUserJoined: (connection, remoteUid, elapsed) {
+        print('🎙️ Child detected in channel! uid=$remoteUid');
+        // ✅ Re-apply audio settings when child joins
+        _engine?.muteAllRemoteAudioStreams(false);
+        _engine?.setEnableSpeakerphone(true);
+        _engine?.adjustPlaybackSignalVolume(100);
+      },
+      onUserOffline: (connection, remoteUid, reason) {
+        print('📴 Child left channel uid=$remoteUid reason=$reason');
+      },
+      onRemoteAudioStateChanged:
+          (connection, remoteUid, state, reason, elapsed) {
+        print('🔊 Remote audio state=$state reason=$reason');
+      },
+      onAudioVolumeIndication:
+          (connection, speakers, speakerNumber, totalVolume) {
+        if (totalVolume > 0) print('🔊 Volume: $totalVolume');
+      },
+      onError: (err, msg) {
+        print('❌ Agora error: $err - $msg');
+      },
+    ));
+
+    _engineInitialized = true;
+    print('✅ Parent Agora engine initialized');
+  }
 
   @override
   Future<void> sendActivate(int childId) async {
+    print('📤 Sending sound:start for childId=$childId');
     _socket.emit('sound:start', {'childId': childId});
   }
 
@@ -31,42 +92,54 @@ class SoundAroundDataSourceImpl implements SoundAroundDataSource {
   }
 
   @override
-  Future<void> startPlaying() async {
-    if (!_playerOpen) {
-      await _player.openPlayer();
-      _playerOpen = true;
+  Future<void> startPlaying(int childId) async {
+    await _initEngine();
+
+    // ✅ Leave previous channel cleanly
+    if (_inChannel) {
+      await _engine!.leaveChannel();
+      await Future.delayed(const Duration(milliseconds: 500));
     }
-    _lastIndex = -1;
 
-    _socket.on('sound:chunk_received', (data) async {
-      final index = data['chunkIndex'] as int? ?? 0;
-      final b64 = data['audioBase64'] as String?;
-      if (b64 == null || index <= _lastIndex) return;
-      _lastIndex = index;
-      try {
-        final bytes = base64Decode(b64);
-        final dir = await getTemporaryDirectory();
-        final f = File('${dir.path}/flamingo_play_$index.aac');
-        await f.writeAsBytes(bytes);
-        if (_player.isPlaying) await _player.stopPlayer();
-        await _player.startPlayer(
-          fromURI: f.path,
-          codec: Codec.aacADTS,
-          whenFinished: () async { if (await f.exists()) await f.delete(); },
-        );
-      } catch (e) {
-        print('❌ play chunk: $e');
-      }
-    });
+    final channelName = 'flamingo_$childId';
+    print('🎧 Parent joining Agora channel: $channelName');
 
-    _socket.on('sound:child_offline', (_) => stopPlaying());
+    await _engine!.joinChannel(
+      token: '',
+      channelId: channelName,
+      uid: 0,
+      options: const ChannelMediaOptions(
+        clientRoleType: ClientRoleType.clientRoleAudience,
+        autoSubscribeAudio: true,
+        autoSubscribeVideo: false,
+        publishMicrophoneTrack: false,
+        publishCameraTrack: false,
+      ),
+    );
+
+    // ✅ Wait for join then configure audio
+    await Future.delayed(const Duration(milliseconds: 300));
+    await _engine!.muteLocalAudioStream(true);
+    await _engine!.muteAllRemoteAudioStreams(false);
+    await _engine!.setEnableSpeakerphone(true);
+    await _engine!.adjustPlaybackSignalVolume(100);
+
+    // ✅ Monitor volume to verify audio is flowing
+    await _engine!.enableAudioVolumeIndication(
+      interval: 1000,
+      smooth: 3,
+      reportVad: true,
+    );
+
+    print('🔊 Audio configured — waiting for child audio...');
   }
 
   @override
-  Future<void> stopPlaying() async {
-    _socket.off('sound:chunk_received');
-    _socket.off('sound:child_offline');
-    if (_player.isPlaying) await _player.stopPlayer();
-    _lastIndex = -1;
+  Future<void> stopPlaying(int childId, int sessionId) async {
+    print('🛑 Parent leaving Agora channel');
+    if (_inChannel) {
+      await _engine!.leaveChannel();
+      _inChannel = false;
+    }
   }
 }
