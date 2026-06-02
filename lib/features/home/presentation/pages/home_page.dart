@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flamingo_parent/features/home/presentation/pages/pairing_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:http/http.dart' as http;
@@ -7,10 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/service_locator.dart';
+import '../../../../core/utils/socket_service.dart';
 import '../../../location/presentation/bloc/location_bloc.dart';
 import '../../../location/presentation/pages/location_page.dart';
 import '../../../sound_around/presentation/bloc/sound_around_bloc.dart';
 import '../../../sound_around/presentation/pages/sound_around_page.dart';
+import '../../../sos/presentation/pages/sos_alert_page.dart';
+import '../pages/pairing_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -29,6 +31,33 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.initState();
     _tabCtrl = TabController(length: 2, vsync: this);
     _loadUser();
+    _listenForSOS();
+  }
+
+  void _listenForSOS() {
+    sl<SocketService>().on('sos:received', (data) {
+      print('🚨 SOS received: $data');
+      if (mounted) {
+        // Show full screen SOS alert
+        Navigator.push(
+          context,
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => SosAlertPage(
+              childName: data['childName'] ?? 'Child',
+              latitude: data['latitude'] != null
+                  ? (data['latitude'] as num).toDouble()
+                  : null,
+              longitude: data['longitude'] != null
+                  ? (data['longitude'] as num).toDouble()
+                  : null,
+              timestamp: data['timestamp'] ?? DateTime.now().toIso8601String(),
+            ),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+          ),
+        );
+      }
+    });
   }
 
   Future<void> _loadUser() async {
@@ -44,7 +73,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
     try {
       final res = await http.get(
-        Uri.parse('${AppConstants.serverUrl}${AppConstants.childrenEndpoint}'),
+        Uri.parse(
+            '${AppConstants.serverUrl}${AppConstants.childrenEndpoint}'),
         headers: {'Authorization': 'Bearer $token'},
       );
 
@@ -52,7 +82,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         final data = jsonDecode(res.body);
         final children = data['children'] as List;
         if (children.isNotEmpty) {
-          // ✅ Always use LAST child (most recently paired)
           final child = children.last;
           final childId = child['id'] as int;
           print('✅ Using childId: $childId (${child['name']})');
@@ -66,6 +95,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    sl<SocketService>().off('sos:received');
     _tabCtrl.dispose();
     super.dispose();
   }
@@ -133,7 +163,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   ],
                 ),
               ),
-              // Child ID indicator — shows green when child is paired
               if (_childId != null)
                 Container(
                   margin: const EdgeInsets.only(right: 8),
@@ -154,12 +183,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                             fontWeight: FontWeight.bold)),
                   ]),
                 ),
-              // Pair button
               GestureDetector(
                 onTap: () async {
                   await Navigator.push(context,
                       MaterialPageRoute(builder: (_) => const PairingPage()));
-                  // Reload children after returning from pairing page
                   _loadUser();
                 },
                 child: Container(
@@ -181,7 +208,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(width: 8),
-              // Live badge
               BlocBuilder<LocationBloc, LocationState>(
                 builder: (_, state) {
                   final live = state is LocationUpdated;
@@ -202,12 +228,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                           height: 7,
                           decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color:
-                                  live ? Colors.greenAccent : Colors.white38)),
+                              color: live
+                                  ? Colors.greenAccent
+                                  : Colors.white38)),
                       const SizedBox(width: 5),
                       Text(live ? 'LIVE' : 'OFFLINE',
                           style: TextStyle(
-                              color: live ? Colors.greenAccent : Colors.white54,
+                              color:
+                                  live ? Colors.greenAccent : Colors.white54,
                               fontSize: 11,
                               fontWeight: FontWeight.bold)),
                     ]),
@@ -240,21 +268,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 decoration: BoxDecoration(
                   border: Border(
                       bottom: BorderSide(
-                          color: active ? AppTheme.primary : Colors.transparent,
+                          color:
+                              active ? AppTheme.primary : Colors.transparent,
                           width: 3)),
                 ),
                 child: Column(children: [
                   Icon(tabs[i].icon,
-                      color: active ? AppTheme.primary : Colors.grey.shade400,
+                      color:
+                          active ? AppTheme.primary : Colors.grey.shade400,
                       size: 22),
                   const SizedBox(height: 3),
                   Text(tabs[i].label,
                       style: TextStyle(
-                          color:
-                              active ? AppTheme.primary : Colors.grey.shade400,
+                          color: active
+                              ? AppTheme.primary
+                              : Colors.grey.shade400,
                           fontSize: 12,
-                          fontWeight:
-                              active ? FontWeight.bold : FontWeight.normal)),
+                          fontWeight: active
+                              ? FontWeight.bold
+                              : FontWeight.normal)),
                 ]),
               ),
             ),
